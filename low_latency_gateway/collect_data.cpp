@@ -13,31 +13,30 @@
 
 using namespace std;
 
-// --- 基础配置 ---
-// 这里设极低(0.00005)，是为了采集所有微小波动，交给Python去筛选最佳阈值
+// --- Core Configuration ---
+// Ultra-low threshold to capture micro-volatility for downstream Python optimization.
 const double DATA_COLLECT_THRESHOLD = 0.00005;
-const long long WINDOW_US = 100000; // 100ms 窗口
+const long long WINDOW_US = 100000; // 100ms window
 
 struct SymbolState {
   double last_p = 0;
 };
 struct BtcSignal {
-  double pct;       // 本次跳幅
-  double prev_pct;  // 上次跳幅 (用于计算斜率/动量)
-  long long ts;     // 信号时间
-  long long lag;    // 网络延迟
-  bool is_momentum; // 是否连续同向
+  double pct;       // Current tick fluctuation
+  double prev_pct;  // Previous fluctuation (for momentum calculation)
+  long long ts;     // Signal timestamp
+  long long lag;    // Network latency (NetLag)
+  bool is_momentum; // Continuous unidirectional movement flag
   bool active = false;
 };
 
 SymbolState btc, sol;
 BtcSignal sig;
 
-// 1. 极速提取 (不产生临时字符串)
+// 1. Zero-allocation fast extraction (Avoids std::string instantiations)
 double fast_val(const char *buf, const char *key) {
   const char *p = strstr(buf, key);
-  if (!p)
-    return 0;
+  if (!p) return 0;
   p += strlen(key) + 3;
   return strtod(p, nullptr);
 }
@@ -51,11 +50,10 @@ long long get_now() {
 void process(char *buf) {
   long long now = get_now();
   const char *s_pos = strstr(buf, "\"s\":\"");
-  if (!s_pos)
-    return;
+  if (!s_pos) return;
   char sym_char = s_pos[5]; // B=BTC, S=SOL
 
-  // 计算 NetLag
+  // Calculate NetLag (Local time minus Server time)
   const char *e_pos = strstr(buf, "\"E\":");
   long long lag = e_pos ? (now - (atoll(e_pos + 4) * 1000)) : 0;
 
@@ -70,19 +68,19 @@ void process(char *buf) {
     double pct = (p - btc.last_p) / btc.last_p;
 
     if (abs(pct) >= DATA_COLLECT_THRESHOLD) {
-      // 判定动量：如果本次和上次同向，则 momentum = true
+      // Momentum detection: True if current and previous ticks move in the same direction.
       bool mom = (pct * sig.prev_pct > 0);
 
       sig = {pct, sig.prev_pct, now, lag, mom, true};
-      sig.prev_pct = pct; // 更新历史
+      sig.prev_pct = pct; // Update history
 
-      // 屏幕只打印极简信息，防阻塞
+      // Minimal stdout logging to prevent I/O blocking
       printf("Rec: %.5f%% | Mom: %d | Lag: %lld\n", pct * 100, mom, lag);
     }
     btc.last_p = p;
-  } else if (sym_char == 'S') { // SOL (只抓 SOL，剔除 ORDI 杂音)
-    if (!sig.active)
-      return;
+  } else if (sym_char == 'S') { // SOL (Filtered target symbol)
+    if (!sig.active) return;
+    
     long long delay = now - sig.ts;
     if (delay > WINDOW_US) {
       sig.active = false;
@@ -96,7 +94,7 @@ void process(char *buf) {
     double move = (p - sol.last_p) / sol.last_p;
 
     if (abs(move) > 0.00001) {
-      // 核心落盘：Sym, BTC_Pct, SOL_Pct, Delay, NetLag, Is_Momentum, Qty
+      // Core serialization: Sym, BTC_Pct, SOL_Pct, Delay, NetLag, Is_Momentum, Qty
       static ofstream f("hft_data.csv", ios::app);
       f << "SOL," << sig.pct << "," << move << "," << delay << "," << lag << ","
         << sig.is_momentum << "," << q << endl;
@@ -118,7 +116,7 @@ int main() {
     a.sin_port = htons(443);
     memcpy(&a.sin_addr.s_addr, h->h_addr, h->h_length);
 
-    // 开启 TCP_NODELAY 禁用 Nagle 算法 (极重要)
+    // Disable Nagle's algorithm for microsecond-level latency (CRITICAL)
     int flag = 1;
     setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
 
@@ -131,7 +129,7 @@ int main() {
     SSL_set_tlsext_host_name(ssl, "fstream.binance.com");
     SSL_connect(ssl);
 
-    // 只订阅 BTC 和 SOL，减少带宽干扰
+    // Subscribe only to target symbols to minimize bandwidth noise
     string req =
         "GET /stream?streams=btcusdt@bookTicker/solusdt@bookTicker "
         "HTTP/1.1\r\nHost: fstream.binance.com\r\nUpgrade: "
@@ -143,20 +141,22 @@ int main() {
     int rem = 0;
     while (true) {
       int len = SSL_read(ssl, buf + rem, sizeof(buf) - rem);
-      if (len <= 0)
-        break;
+      if (len <= 0) break;
+      
       int tot = len + rem;
       char *p = buf;
       char *e = p + tot;
+      
       while (p < e) {
         if ((unsigned char)p[0] != 0x81) {
           p++;
           continue;
         }
-        if (e - p < 2)
-          break;
+        if (e - p < 2) break;
+        
         size_t hl = 2;
         uint64_t pl = p[1] & 127;
+        
         if (pl == 126) {
           hl = 4;
           pl = ((unsigned char)p[2] << 8) | (unsigned char)p[3];
@@ -166,8 +166,9 @@ int main() {
           for (int i = 0; i < 8; i++)
             pl = (pl << 8) | (unsigned char)p[2 + i];
         }
-        if (e - p < hl + pl)
-          break;
+        
+        if (e - p < hl + pl) break;
+        
         p[hl + pl] = '\0';
         process(p + hl);
         p += hl + pl;
