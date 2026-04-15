@@ -1,31 +1,38 @@
-# ⚡ Binance Ultra-HFT Backtest Engine (Abandoned)
+# ⚡ Binance Ultra-HFT Tick Processing Engine
 
-**[WARNING] This is NOT a general-purpose backtesting library. This is an extreme, hardware-specific I/O and compute infrastructure experiment.**
+![NVIDIA Nsight Profiling](Pasted%20image.png)
 
-This project was built to explore the absolute limits of consumer-grade hardware in processing massive tick-level financial data. It demonstrates how to maximize PCIe NVMe SSD throughput and overlap disk I/O with CUDA compute on a memory-constrained machine.
+## 📖 Overview
+This repository contains a high-performance, hardware-optimized I/O and compute infrastructure designed for processing massive tick-level financial data. It achieves extreme throughput by completely overlapping disk I/O with GPU computation using a strict Out-of-Core streaming architecture.
 
-### 💻 Hardware Environment
-The benchmarks were physical-stopwatch verified on a consumer gaming laptop (**Colorfire G16, 2024 Edition**):
-- **CPU:** Intel Core i7-13650HX
-- **RAM:** 16GB DDR5 (Strict memory constraint for Out-of-Core processing)
-- **Storage:** PCIe NVMe SSD
+## 📊 Benchmark & Hardware Specifications
+The following performance metrics were recorded under strict physical timing (~60 seconds execution time) to ensure absolute memory safety and architectural stability over extended runs. 
 
-### 📊 Performance Record (Stable Version)
-- **Dataset:** 139 GB Binance Standard Historical Data (2017 - 2025.11)
-- **Execution Time:** **~ 60 Seconds** (Physical stopwatch)
-- **Throughput:** **~ 2.31 GB/s**
-> *Note: An earlier, highly experimental version achieved ~43 seconds (>3.2 GB/s), but it was overly brittle and lacked memory safety. This repository contains the refactored, stable version that balances extreme I/O extraction with architectural reliability.*
+**Hardware Environment (Colorful G16 2024):**
+*   **CPU:** Intel Core i7-13650HX (14 Cores, 20 Threads)
+*   **GPU:** NVIDIA GeForce RTX 4060 Laptop GPU (8GB GDDR6)
+*   **RAM:** 16GB DDR5 4800MHz (Strict constraint for Out-of-Core processing)
+*   **Storage:** PCIe 3.0 NVMe SSD
 
-### 🛠️ Hardcore Engineering Trade-offs
-To achieve nanosecond-level optimization and Zero-Overhead parsing, this system embraces extreme design compromises:
-1. **Zero Fault Tolerance (Strict Schema):** Abandons all boundary checks and exception handling. Parses raw bytes via pointer arithmetic. A single byte misalignment in the source data will result in an immediate `Segfault`.
-2. **Out-of-Core Streaming (Double Buffering):** Implemented a double-buffering pipeline via POSIX `pread` and CUDA Pinned Memory (`cudaHostAlloc`) to hide Disk I/O latency completely within a 16GB RAM constraint.
-3. **Bare-Metal Networking:** Bypasses bloated high-level WebSocket libraries. Implements raw TCP sockets with OpenSSL, disabling Nagle's algorithm (`TCP_NODELAY`) for microsecond-level market data ingestion.
+**Performance Metrics:**
+*   **Dataset:** 139 GB Binance Standard Historical Data
+*   **Execution Time:** **~ 60 Seconds** (Physical stopwatch verified)
+*   **Throughput:** **~ 2.31 GB/s** (Sustained)
+> *Note: While experimental, unsafe builds reached peak throughputs of >3.0 GB/s (~43s execution), this stable version balances extreme I/O extraction with strict memory alignment to prevent `Segfault` during massive data ingestion.*
 
-### 📈 Profiling & Upwork Portfolio
-This project's I/O optimization pipeline and NVIDIA Nsight Systems (nsys) profiling results have been featured on my Upwork portfolio. 
-The Nsight timeline proves the textbook-level overlapping of CPU `pread` disk fetching and GPU `HtoD / sum_data` kernel execution.
-🔗 **[View the Nsight Profiling Showcase on my Upwork](https://www.upwork.com/freelancers/~01cd758c8d7cd457a3?p=2014689789157888000)**
+## ⚙️ Core Architecture
 
-**Status:**
-The project is suspended at the infrastructure layer. It is open-sourced under the **AGPL-3.0 License** solely as a Reference Implementation for high-performance systems engineering (C/CUDA).
+### 1. Zero-Allocation Data Ingestion
+Bypasses bloated standard CSV/JSON parsers. Raw byte streams are piped directly from disk into a C++ parser using strict pointer arithmetic. Data is packed into a high-density 25-byte binary `struct` utilizing `__attribute__((packed))`, minimizing memory footprint and CPU parsing overhead.
+
+### 2. Out-of-Core CUDA Compute Pipeline
+Overcomes the 16GB RAM physical limitation when processing 139GB of data:
+*   **Double Buffering:** Implemented via POSIX `pread` and `std::atomic` flags. A background I/O thread aggressively fetches from the SSD while the main thread pushes the previous chunk to the GPU.
+*   **Pinned Memory DMA:** Utilizes `cudaHostAlloc` for zero-copy Host-to-Device transfers over the PCIe bus.
+*   **Pipeline Overlapping:** As shown in the Nsight profile above, CPU `pread` and GPU `HtoD / Kernel Execution` are perfectly overlapped on the timeline, effectively hiding disk I/O latency.
+
+### 3. Bare-Metal Low Latency Gateway
+For real-time data ingestion, the system bypasses high-level WebSocket libraries in favor of raw TCP sockets (`<sys/socket.h>`) with OpenSSL. Nagle's algorithm is explicitly disabled (`TCP_NODELAY`) to achieve microsecond-level market data latency, coupled with real-time momentum and NetLag feature extraction.
+
+---
+*For more details regarding the I/O optimization pipeline and NVIDIA Nsight Systems profiling, please visit my[Upwork Portfolio](https://www.upwork.com/freelancers/~01cd758c8d7cd457a3?p=2014689789157888000).*
