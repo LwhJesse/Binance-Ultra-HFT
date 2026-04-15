@@ -1,0 +1,9 @@
+build/
+bin/
+*.o
+*.out
+*.csv
+*.bin
+*.txt
+*.sqlite
+*.nsys-rep
