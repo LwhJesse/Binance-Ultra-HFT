@@ -49,4 +49,16 @@ Bei diesem Modul geht es **nicht** um Throughput, sondern um die Minimierung der
 Dieses Projekt verwirft moderne High-Level-Abstraktionen zugunsten roher POSIX-Primitiven und strikter Speicherlayouts.
 
 #### 1. Hardcodierte Zero-Allocation-I/O-Pipeline (`data_ingestion/`)
-* **Disk-Bypass-Streaming:** `.zip`-Dateien werden niemals auf die
+* **Disk-Bypass-Streaming:** `.zip`-Dateien werden niemals auf die Festplatte entpackt. `unzip -p` wird über `xargs` parallelisiert und direkt in die `stdin` der C++-Binärdatei geleitet, um die Schreiblimits der SSD zu umgehen.
+* **Manuelle Pointer-Arithmetik für Nachkommastellen:** `convert.cpp` verzichtet auf standardmäßige String-zu-Fließkomma-Konvertierungen. Es parst ASCII-Ziffern in einem einzigen Durchlauf und zählt manuell die Nachkommastellen (`fraction_count - 8`), um Preise als Ganzzahlen (Satoshis/0,01 USDT) zu serialisieren.
+* **Dichtes Packen:** Daten werden mittels `__attribute__((packed))` in eine 25-Byte-Struktur gezwungen, wodurch das Compiler-Padding eliminiert wird, um die Trefferquoten im L1/L2-Cache zu maximieren.
+
+#### 2. Out-of-Core CUDA Compute-Pipeline (`cuda_compute_engine/`)
+* **L3-Cache & Core-Pinning:** Der I/O-Thread und die Compute-Threads werden mittels `pthread_setaffinity_np` strikt an spezifische CPU-Kerne gebunden, um den Overhead durch Kontextwechsel und Migrationen durch den OS-Scheduler zu verhindern.
+* **Sperrfreies Double-Buffering:** Die Synchronisation zwischen dem Abrufen von Daten vom Speicher durch die CPU und der Übermittlung an die GPU wird ausschließlich über `std::atomic`-Flags gesteuert.
+* **Zero-Copy PCIe DMA:** RAM-Allokationen umgehen das virtuelle Paging durch die Verwendung von `cudaHostAlloc`. `pread` schreibt direkt in den fixierten Host-Speicher (Pinned Memory), der dann asynchron von der GPU über `cudaMemcpyAsync` abgerufen wird, wodurch die Festplattenlatenz vollständig verdeckt wird.
+
+#### 3. Bare-Metal-Netzwerk-Gateway (`low_latency_gateway/`)
+* **Kernel-Level-Sockets:** Hochrangige WebSocket-Bibliotheken werden komplett entfernt. Das Gateway verwendet rohe `<sys/socket.h>`-Aufrufe, die in OpenSSL verpackt sind.
+* **Latenz-Tuning im Mikrosekundenbereich:** Der TCP-Stack wird explizit optimiert. Der Nagle-Algorithmus wird deaktiviert (`TCP_NODELAY`), um zu verhindern, dass das Betriebssystem Netzwerkpakete bündelt, wodurch die sofortige Übertragung von Signalen mit Mikrovolatilität sichergestellt wird.
+* **Rohes Entpacken von Frames:** Der Code parst die Header des WebSocket-Protokolls direkt über bitweise Operationen, um die JSON-Nutzdaten zu lokalisieren. Dadurch werden Zwischenallokationen von `std::string` auf dem Heap im kritischen Pfad (Hot Path) vermieden.
